@@ -1,0 +1,301 @@
+---
+title: "Monocyte analysis V5"
+author: "Raphael Kübler"
+date: "11/10/2021"
+output:
+  rmarkdown::html_document:
+   theme: united
+   highlight: tango
+   code_folding: hide
+   toc: true
+   toc_float: true
+   df_print: paged
+   smooth_scroll: true
+   number_sections: false
+   self_contained: true 
+---
+
+---
+
+```{r load.packages, echo=FALSE, message=FALSE, results='hide'}
+library(xlsx)
+library(dplyr)
+library(readxl)
+library(Hmisc)
+library(pheatmap)
+library(DESeq2)
+library(factoextra)
+library(broom)
+
+library(variancePartition)
+library(RColorBrewer)
+library(pcaExplorer)
+library(vsn)
+
+library(clusterProfiler)
+
+library(EnhancedVolcano)
+library(plyr)
+library(ggpmisc)
+library(ggbeeswarm)
+library(ggpubr)
+knitr::opts_chunk$set( 
+  warning=FALSE,
+  message=FALSE,
+  results = 'asis',
+  error = FALSE,
+  tidy = FALSE,
+  fig.show = "hold")
+```
+
+Analysis of monocyte data (SCZ vs CTR): complex model
+
+## Load data
+```{r load_data, echo=FALSE}
+dir <- file.path("D:", "R", "R workspace")
+setwd(dir)
+
+load("11102021_monocyte paper analysis_V5.RData")
+
+heatmap.color.code <- colorRampPalette(rev(brewer.pal(11, "RdYlBu")))(496)
+
+```
+
+## First step QC
+
+Plotting the first QC results:
+
+(1) Density plot
+```{r plots.1, echo=FALSE}
+#Density plots
+#550 x 450
+#Library size; no need to filter: normally distributed
+hist(log10(int.covs$'Mapped'), xlab="Library sizes (log10 mapped reads)", 
+     main=paste("Mapped reads \n\n", "mean = ", round(mean(int.covs$'Mapped'),2), ";",
+                "median = ", round(median(int.covs$'Mapped'),2)), 
+     breaks=20, col="grey80", ylab="Number of samples")
+
+hist(int.covs$'Exonic.Rate', xlab="Exonic Rate", 
+     main=paste("Exonic Rate \n\n", "mean = ", round(mean(int.covs$'Exonic.Rate'),2), ";",
+                "median = ", round(median(int.covs$'Exonic.Rate'),2)), 
+     breaks=20, col="grey80", ylab="Number of samples")
+
+hist(int.covs$'Genes.Detected', xlab="Genes Detected", 
+     main=paste("Genes Detected \n\n", "mean = ", round(mean(int.covs$'Genes.Detected'),2), ";",
+                "median = ", round(median(int.covs$'Genes.Detected'),2)), 
+     breaks=20, col="grey80", ylab="Number of samples")
+
+hist(int.covs$'RIN', xlab="RIN values", 
+     main=paste("RIN value distribution \n\n", "mean = ", round(mean(int.covs$'RIN'),2), ";",
+                "median = ", round(median(int.covs$'RIN'),2)), 
+     breaks=20, col="grey80", ylab="Number of samples")
+
+```
+
+(2) Covariate correlation
+```{r norm.qc1, echo=TRUE, fig.height = 7, fig.width = 7, fig.align = "center"}
+#Covariate correlation
+for (i in colnames(int.covs))
+  int.covs[[i]] <- as.numeric(int.covs[[i]])
+MEs_lin(int.covs,int.covs)
+```
+
+(3) PC-covariate correlation
+```{r QC.pre, echo=TRUE, fig.height = 4, fig.width = 7, fig.align = "center"}
+
+#PC-covariate correlation (nomal p)
+PCA_cov_cor_R(int.covs,trnsf.df)
+
+```
+
+The model we use for the downstream analyses (DEA & data correction) is:
+~ batch + RIN + percent.ERCC + stimulation
+
+
+Next step: QC on vst-normalized expression values.
+
+(1) Gene expression variance (low variance in lowly expressed genes (to the left) = good)
+
+```{r norm.qc2, echo=TRUE, fig.height = 4, fig.width = 6.5, fig.align = "center"}
+meanSdPlot(assay(vsd))
+```
+
+(2) PCA
+
+```{r qc3.1, echo=TRUE, fig.height = 4, fig.width = 5.5, fig.align = "center"}
+#Check influence of covariates on data variance after transformation
+PCAplot(pca, "batch", PoV.df=PoV, colors=c('#2E7281','black','#50B8CF',"green"))
+PCAplot(pca, "status", PoV.df=PoV)
+```
+
+## Data correction
+
+We next correct the data with the same model we use for the DESeq2 DEA (for plotting purposes post DEA).
+
+The results are as follows:
+(1) PC-covariate correlation post-correction:
+
+```{r QC.post, echo=TRUE, fig.height = 4, fig.width = 4, fig.align = "center"}
+PCA.covar(batch.rem,int.covs,data.r=F,type="pearson")
+```
+
+(2) PCA post-correction
+
+```{r norm.qc3.1, echo=TRUE, fig.height = 4, fig.width = 5.5, fig.align = "center"}
+PCAplot(pca.corrected, "batch", PoV.df=PoV.corrected, colors=c('#2E7281','black','#50B8CF',"green"))
+PCAplot(pca.corrected, "status", PoV.df=PoV.corrected)
+```
+
+## DESeq2 anaylsis
+
+We then go into the differential gene-expression analysis:
+
+(1) Overview of the results 
+```{r plots.11, echo=FALSE}
+summary(res)
+```
+
+As well as the number of differentially expressed genes at lfc </> -1/1 at padj < 0.05:
+
+```{r plots.12, echo=FALSE}
+sum(res$log2FoldChange < -1 & res$padj < 0.05, res$log2FoldChange > 1 & res$padj < 0.05, na.rm=TRUE)
+```
+
+## Interactive results table
+
+(1) Results
+
+```{r DESeq2, echo=TRUE, message=FALSE, warning=FALSE, paged.print=TRUE}
+#DT::renderDT(data.frame(res.complex), "OH1.5A",scrollY=1000)
+
+createDT(data.frame(res), "Status", scrollY=1000)
+
+```
+
+## Plotting results
+
+(2) Volcano plot:
+```{r plots.13, echo=TRUE, fig.height = 6, fig.width = 6, fig.align = "center"}
+EnhancedVolcano(res,
+                lab = rownames(res),
+                x = 'log2FoldChange',
+                y = 'padj',
+                pCutoff = 0.1,
+                FCcutoff = 2,
+                labSize = 6,
+                xlim = c(-20,20),
+                ylim = c(-1,10),
+                legendPosition = 'right')
+```
+
+(3) Plotting top genes on a heatmap:
+```{r plots.14, echo=TRUE, fig.height = 6, fig.width = 6, fig.align = "center"}
+
+#Plotting DEGs
+ComplexHeatmap::pheatmap(batch.rem[rownames(batch.rem) %in% top100.up,], 
+                         cluster_rows = T, cluster_cols = T, annotation_legend = T, show_colnames = F, show_rownames = F,
+                         scale='row',
+                         legend = T, treeheight_row = 0,
+                         annotation_col=annot_df, annotation_colors = annot_colors, fontsize_row = 8)
+
+ComplexHeatmap::pheatmap(batch.rem[rownames(batch.rem) %in% top100.up,], 
+                         cluster_rows = T, cluster_cols = T, annotation_legend = T, show_colnames = F, show_rownames = F,
+                         scale='row',
+                         legend = T, treeheight_row = 0,
+                         annotation_col=annot_df, annotation_colors = annot_colors, fontsize_row = 8)
+
+ComplexHeatmap::pheatmap(batch.rem[rownames(batch.rem) %in% top100.down,], 
+                         cluster_rows = T, cluster_cols = T, annotation_legend = T, show_colnames = F, show_rownames = F,
+                         scale='row',
+                         legend = T, treeheight_row = 0,
+                         annotation_col=annot_df, annotation_colors = annot_colors, fontsize_row = 8)
+```
+
+
+## Enrichment testing results
+(1) List enrichments
+```{r Enrich, echo=TRUE, message=FALSE, warning=FALSE, paged.print=TRUE}
+#DT::renderDT(data.frame(res.complex), "OH1.5A",scrollY=1000)
+paste("Reminder: we have", length(upreg.genes), "upregulated and", length(downreg.genes), "downregulated genes.")
+
+createDT(DEG.enrich.res, "Enrichment", scrollY=100)
+
+```
+
+(2) GO enrichments
+```{r plots.15, echo=TRUE, fig.height = 6, fig.width = 17, fig.align = "center"}
+
+dotplot(GO.up, split="ONTOLOGY") + facet_grid(ONTOLOGY~., scale="free")
+dotplot(GO.down, split="ONTOLOGY") + facet_grid(ONTOLOGY~., scale="free")
+```
+
+## Signature co-variance
+(1) Signature expression (Microglia, NfKB, IFNy)
+```{r plots.16, echo=TRUE, fig.height = 6, fig.width = 6, fig.align = "center"}
+pheatmap::pheatmap(mic.panel, cluster_rows = T, cluster_cols = T, annotation_legend = F, show_colnames = F, show_rownames = T,
+                   legend_breaks=c(-4,0,4,4), scale="row",
+                   legend = F, treeheight_row = 0,
+                   legend_labels=c("-4","0","4","Residual expression \n\n"),
+                   annotation_col=annot_df, annotation_colors = annot_colors, fontsize_row = 8)
+
+pheatmap::pheatmap(NFKB.panel, cluster_rows = T, cluster_cols = T, annotation_legend = F, show_colnames = F, show_rownames = F,
+                   legend_breaks=c(-4,0,4,4), scale="row",
+                   legend = F, treeheight_row = 0,
+                   legend_labels=c("-4","0","4","Residual expression \n\n"),
+                   annotation_col=annot_df, annotation_colors = annot_colors, fontsize_row = 8)
+
+pheatmap::pheatmap(IFN.panel, cluster_rows = T, cluster_cols = T, annotation_legend = F, show_colnames = F, show_rownames = F,
+                   legend_breaks=c(-4,0,4,4), scale="row",
+                   legend = F, treeheight_row = 0,
+                   legend_labels=c("-4","0","4","Residual expression \n\n"),
+                   annotation_col=annot_df, annotation_colors = annot_colors, fontsize_row = 8)
+
+```
+
+(1A) Signature expression only for lFC < -1 | lfc > 1 genes (Microglia, NfKB, IFNy)
+```{r plots.16A, echo=TRUE, fig.height = 6, fig.width = 4, fig.align = "center"}
+for (i in c("NFKB", "IFN", "Microglia")){
+  panel <- panel.list[[i]]
+  DE <- DE.list[[i]]
+  df <- panel[DE$log2FoldChange < -1 | DE$log2FoldChange > 1,]
+  df <- df[,order(as.numeric(colnames(df)), method="radix", decreasing=F)]
+  annot_df_heat <- data.frame("Status" = int.covs[order(as.numeric(rownames(int.covs), decreasing=F)),]$status, check.names=F)
+  rownames(annot_df_heat) <- colnames(df)
+  ComplexHeatmap::pheatmap(df, scale= "row",
+                         cluster_rows = T, cluster_cols = T, annotation_legend = T, show_colnames = F, show_rownames = T,
+                         legend = T, treeheight_row = 0, color = heatmap.color.code,
+                         annotation_col=annot_df_heat, fontsize_row = 8)
+}
+
+```
+
+(2) Signature co-variance
+```{r plots.17, echo=TRUE, fig.height = 5.5, fig.width = 6.5, fig.align = "center"}
+paste("Microglia")
+PCA_cov_cor_R(int.covs, mic.panel)
+PCAplot(mic.pca, "status", PoV.df=NFKB.PoV, pc.1=5, pc.2=6)
+
+paste("NFKB")
+PCA_cov_cor_R(int.covs, NFKB.panel)
+PCAplot(NFKB.pca, "status", PoV.df=NFKB.PoV, pc.1=5, pc.2=6)
+
+paste("IFNy")
+PCA_cov_cor_R(int.covs, IFN.panel)
+PCAplot(IFN.pca, "status", PoV.df=NFKB.PoV, pc.1=5, pc.2=6)
+
+
+```
+
+(2A) Scatter plot of signature co-variance
+```{r plots.18, echo=TRUE, fig.height = 8, fig.width = 8, fig.align = "center"}
+scatters.all
+
+```
+
+(2A) Scatter plot of signature with DEG co-variance
+```{r plots.19, echo=TRUE, fig.height = 8, fig.width = 12, fig.align = "center"}
+DEGscatters.all
+
+```
+
+

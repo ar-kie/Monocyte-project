@@ -1,0 +1,314 @@
+---
+title: "Monocyte analysis V8b"
+author: "Raphael Kübler"
+date: "11/16/2021"
+output:
+  rmarkdown::html_document:
+   theme: united
+   highlight: tango
+   code_folding: hide
+   toc: true
+   toc_float: true
+   df_print: paged
+   smooth_scroll: true
+   number_sections: false
+   self_contained: true 
+---
+
+---
+
+```{r load.packages, echo=FALSE, message=FALSE, results='hide'}
+library(xlsx)
+library(dplyr)
+library(readxl)
+library(Hmisc)
+library(pheatmap)
+library(DESeq2)
+library(factoextra)
+library(broom)
+
+library(variancePartition)
+library(RColorBrewer)
+library(pcaExplorer)
+library(vsn)
+
+library(clusterProfiler)
+
+library(EnhancedVolcano)
+library(plyr)
+library(ggpmisc)
+library(ggbeeswarm)
+library(ggpubr)
+knitr::opts_chunk$set( 
+  warning=FALSE,
+  message=FALSE,
+  results = 'asis',
+  error = FALSE,
+  tidy = FALSE,
+  fig.show = "hold")
+
+plot.density <- function(meta.df,to.color="Condition",to.plot="Library size",ylab.title="Density",xlab.title="Library size"){
+  meta.df %>% 
+    ggplot(aes_string(color=to.color, x=to.plot, fill=to.color)) + 
+    geom_density(alpha = 0.2) + 
+    scale_x_log10() + 
+    theme_classic() +
+    ylab(ylab.title) +
+    xlab(xlab.title)
+}
+
+```
+
+Analysis of monocyte data (SCZ vs CTR): simplest model (~ status)
+
+## Load data
+```{r load_data, echo=FALSE}
+dir <- file.path("D:", "R", "R workspace")
+setwd(dir)
+
+load("11102021_monocyte paper analysis_V6.RData")
+
+heatmap.color.code <- colorRampPalette(rev(brewer.pal(11, "RdYlBu")))(496)
+
+```
+
+## First step QC
+
+Plotting the first QC results:
+
+(1) Density plot
+```{r plots.1, echo=FALSE}
+#Density plots
+#550 x 450
+#Library size; no need to filter: normally distributed
+plot.density(int.covs,to.color="status",to.plot="`Mapped`",xlab.title="Reads mapped")
+plot.density(int.covs,to.color="status",to.plot="`Exonic.Rate`",xlab.title="Exonic rate")
+plot.density(int.covs,to.color="status",to.plot="`Genes.Detected`",xlab.title="Genes detected")
+plot.density(int.covs,to.color="status",to.plot="`RIN`",xlab.title="RIN")
+
+"Missing/removed samples are:"
+c(paste(1:40)[!paste(1:40) %in% colnames(trnsf.df)])
+
+for (i in colnames(int.covs))
+  int.covs[[i]] <- as.numeric(int.covs[[i]])
+int.covs$batch <- as.factor(int.covs$batch)
+int.covs$status <- as.factor(int.covs$status)
+int.covs$sex <- as.factor(int.covs$sex)
+int.covs$RIN <- as.factor(int.covs$RIN)
+
+```
+
+(2) Covariate correlation
+```{r norm.qc1, echo=TRUE, fig.height = 10, fig.width = 12, fig.align = "center"}
+#Covariate correlation
+for (i in colnames(int.covs))
+  int.covs[[i]] <- as.numeric(int.covs[[i]])
+MEs_lin(int.covs,int.covs)
+```
+
+(3) PC-covariate correlation
+```{r QC.pre, echo=TRUE, fig.height = 4, fig.width = 7, fig.align = "center"}
+
+#PC-covariate correlation (nomal p)
+PCA_cov_cor_R(int.covs,trnsf.df)
+
+```
+
+Next step: QC on vst-normalized expression values.
+
+(1) Inter-sample distances
+
+```{r norm.qc2, echo=TRUE, fig.height = 6, fig.width = 6.5, fig.align = "center"}
+ComplexHeatmap::pheatmap(cor(filt.df,filt.df), color = heatmap.color.code)
+```
+
+(2) PCA
+
+```{r qc3.1, echo=TRUE, fig.height = 4, fig.width = 5.5, fig.align = "center"}
+#Check influence of covariates on data variance after transformation
+PCAplot(pca, "batch", PoV.df=PoV, colors=c('red','orange','blue',"gray"), pc.1 = 3, pc.2 = 4)
+PCAplot(pca, "status", PoV.df=PoV, pc.1 = 3, pc.2 = 4)
+
+```
+
+## DESeq2 anaylsis
+
+We then go into the differential gene-expression analysis:
+
+(1) Overview of the results 
+```{r plots.11, echo=FALSE}
+summary(res)
+```
+
+As well as the number of differentially expressed genes at lfc </> -0.5/0.5 at padj < 0.1:
+
+```{r plots.12, echo=FALSE}
+sum(res$log2FoldChange < -0.5 & res$padj < 0.1, res$log2FoldChange > 0.5 & res$padj < 0.1, na.rm=TRUE)
+```
+
+## Interactive results table
+
+(1) Results
+
+```{r DESeq2, echo=TRUE, message=FALSE, warning=FALSE, paged.print=TRUE}
+#DT::renderDT(data.frame(res.complex), "OH1.5A",scrollY=1000)
+
+createDT(data.frame(res), "Status", scrollY=1000)
+
+```
+
+## Plotting results
+
+(2) Volcano plot:
+```{r plots.13, echo=TRUE, fig.height = 6, fig.width = 10, fig.align = "center"}
+EnhancedVolcano(res,
+                lab = rownames(res),
+                x = 'log2FoldChange',
+                y = 'padj',
+                pCutoff = 0.1,
+                FCcutoff = 2,
+                labSize = 6,
+                xlim = c(-5,5),
+                ylim = c(-1,5),
+                legendPosition = 'right')
+```
+
+(3) Plotting top genes on a heatmap:
+```{r plots.14A, echo=TRUE, fig.height = 6, fig.width = 6, fig.align = "center"}
+
+#Plotting DEGs
+ComplexHeatmap::pheatmap(sort.trnsf.df[rownames(sort.trnsf.df) %in% upreg.genes,], scale= "row",
+                         cluster_rows = T, cluster_cols = F, annotation_legend = T, show_colnames = F, show_rownames = T,
+                         legend = T, treeheight_row = 0, color = heatmap.color.code,
+                         annotation_col=annot_df, annotation_colors = annot_colors, fontsize_row = 8)
+
+
+```
+
+```{r plots.14B, echo=TRUE, fig.height = 3, fig.width = 4, fig.align = "center"}
+
+ComplexHeatmap::pheatmap(sort.trnsf.df[rownames(sort.trnsf.df) %in% downreg.genes,], scale= "row",
+                         cluster_rows = T, cluster_cols = F, annotation_legend = T, show_colnames = F, show_rownames = T,
+                         legend = T, treeheight_row = 0, color = heatmap.color.code,
+                         annotation_col=annot_df, annotation_colors = annot_colors, fontsize_row = 8)
+
+```
+
+## Enrichment testing results
+(1) List enrichments
+```{r Enrich, echo=TRUE, message=FALSE, warning=FALSE, paged.print=TRUE}
+#DT::renderDT(data.frame(res.complex), "OH1.5A",scrollY=1000)
+paste("Reminder: we have", length(upreg.genes), "upregulated and", length(downreg.genes), "downregulated genes.")
+
+createDT(DEG.enrich.res, "Enrichment", scrollY=1000)
+
+```
+
+```{r plots.15beta, echo=TRUE, fig.height = 6, fig.width = 6, fig.align = "center"}
+
+ComplexHeatmap::pheatmap(DEG.enrich, cluster_rows = F, cluster_cols = F, annotation_legend = F, show_colnames = T,
+                         legend_breaks= c(0,-log(0.05), 5, 8, 10), 
+                         legend = T, color = colorRampPalette(RColorBrewer::brewer.pal(6,"RdPu"))(30), 
+                         legend_labels=c("0","2.995", "5", "8","-log(q) \n\n\n"))
+
+
+```
+
+
+(2) GO enrichments
+```{r plots.15, echo=TRUE, fig.height = 10, fig.width = 23, fig.align = "center"}
+
+dotplot(GO.up, split="ONTOLOGY") + facet_grid(ONTOLOGY~., scale="free")
+
+```
+```{r B, echo=TRUE, fig.height = 10, fig.width = 17, fig.align = "center"}
+
+dotplot(GO.down, split="ONTOLOGY") + facet_grid(ONTOLOGY~., scale="free")
+```
+
+
+
+## Signature co-variance
+(1) Signature expression (Microglia, NfKB, IFNy)
+```{r plots.16, echo=TRUE, fig.height = 6, fig.width = 6, fig.align = "center"}
+mic.panel <- mic.panel[,order(int.covs$status, decreasing=F)]
+pheatmap::pheatmap(mic.panel, cluster_rows = T, cluster_cols = F, annotation_legend = F, show_colnames = F, show_rownames = F,
+                   legend_breaks=c(-4,0,4,4), scale="row",
+                   legend = F, treeheight_row = 0,
+                   legend_labels=c("-4","0","4","Residual expression \n\n"),
+                   annotation_col=annot_df, annotation_colors = annot_colors, fontsize_row = 8)
+NFKB.panel <- NFKB.panel[,order(int.covs$status, decreasing=F)]
+
+pheatmap::pheatmap(NFKB.panel, cluster_rows = T, cluster_cols = F, annotation_legend = F, show_colnames = F, show_rownames = F,
+                   legend_breaks=c(-4,0,4,4), scale="row",
+                   legend = F, treeheight_row = 0,
+                   legend_labels=c("-4","0","4","Residual expression \n\n"),
+                   annotation_col=annot_df, annotation_colors = annot_colors, fontsize_row = 8)
+IFN.panel <- IFN.panel[,order(int.covs$status, decreasing=F)]
+
+pheatmap::pheatmap(IFN.panel, cluster_rows = T, cluster_cols = F, annotation_legend = F, show_colnames = F, show_rownames = F,
+                   legend_breaks=c(-4,0,4,4), scale="row",
+                   legend = F, treeheight_row = 0,
+                   legend_labels=c("-4","0","4","Residual expression \n\n"),
+                   annotation_col=annot_df, annotation_colors = annot_colors, fontsize_row = 8)
+
+```
+
+(1A) Signature expression only for lFC < -1 | lfc > 1 genes (Microglia, NfKB, IFNy)
+```{r plots.16A, echo=TRUE, fig.height = 6, fig.width = 4, fig.align = "center"}
+for (i in c("NFKB", "IFN", "Microglia")){
+  panel <- panel.list[[i]]
+  DE <- DE.list[[i]]
+  df <- panel[DE$log2FoldChange < -0.5 | DE$log2FoldChange > 0.5,]
+  df <- df[,order(as.numeric(colnames(df)), method="radix", decreasing=F)]
+  annot_df_heat <- data.frame("status" = int.covs[order(as.numeric(rownames(int.covs), decreasing=F)),]$status, check.names=F)
+  rownames(annot_df_heat) <- colnames(df)
+  ComplexHeatmap::pheatmap(df, scale= "row",
+                         cluster_rows = T, cluster_cols = F, annotation_legend = T, show_colnames = F, show_rownames = T,
+                         legend = T, treeheight_row = 0, color = heatmap.color.code,
+                         annotation_colors = annot_colors,
+                         annotation_col=annot_df_heat, fontsize_row = 8)
+}
+
+```
+
+(2) Signature co-variance
+```{r plots.17, echo=TRUE, fig.height = 5.5, fig.width = 9, fig.align = "center"}
+for (i in c("status", "sex", "batch", "RIN"))
+  int.covs[[i]] <- as.factor(int.covs[[i]])
+
+paste("Microglia")
+PCA_cov_cor_R(int.covs, mic.panel)
+mic.pca <- plotPCA.custom(as.matrix(mic.panel), intgroup=c("status", "batch", "sex", "RIN"), 
+                          ntop = 50000, returnData=TRUE, metadata=int.covs, pc.1=6, pc.2=7)
+mic.PoV <- round(100 * attr(mic.pca, "percentVar"))
+PCAplot(mic.pca, "status", PoV.df=mic.PoV, pc.1=6, pc.2=7)
+
+
+paste("NFKB")
+PCA_cov_cor_R(int.covs, NFKB.panel)
+NFKB.pca <- plotPCA.custom(as.matrix(NFKB.panel), intgroup=c("status", "batch", "sex", "RIN", "age"), 
+                           ntop = 50000, returnData=TRUE, metadata=int.covs, pc.1=3, pc.2=6)
+NFKB.PoV <- round(100 * attr(NFKB.pca, "percentVar"))
+PCAplot(NFKB.pca, "status", PoV.df=NFKB.PoV, pc.1=3, pc.2=6)
+
+
+paste("IFNy")
+PCA_cov_cor_R(int.covs, IFN.panel)
+IFN.pca <- plotPCA.custom(as.matrix(IFN.panel), intgroup=c("status", "batch", "sex", "RIN"), 
+                          ntop = 50000, returnData=TRUE, metadata=int.covs, pc.1 = 5, pc.2 = 6)
+IFN.PoV <- round(100 * attr(IFN.pca, "percentVar"))
+PCAplot(IFN.pca, "status", PoV.df=IFN.PoV, pc.1 = 5, pc.2 = 6)
+
+
+
+```
+
+(2A) Scatter plot of signature co-variance
+```{r plots.18, echo=TRUE, fig.height = 8, fig.width = 8, fig.align = "center"}
+scatters.all
+
+```
+
+
+
