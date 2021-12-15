@@ -8,3 +8,9 @@
 
 3. Simplest model: ~status (beautification and imputation of missing covariate values)
 - [MonoAnalysis_V8](https://ar-kie.github.io/Monocyte-project/docs/16102021_monocyte-analysis-V8_markdown.html). All initial analysis step & more!
+
+
+#========New analysis with correct covariate file=========#
+
+4. Most recent analysis: removing all technical covariates 
+- [MonoAnalysis_V10](https://ar-kie.github.io/Monocyte-project/docs/12152021_monocyte-analysis-V10_markdown.html). 
