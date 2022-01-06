@@ -90,6 +90,10 @@ hist(int.covs$'RIN', xlab="RIN values",
                 "median = ", round(median(int.covs$'RIN'),2)), 
      breaks=20, col="grey80", ylab="Number of samples")
 
+"Missing/removed samples are:"
+c(paste(1:40)[!paste(1:40) %in% colnames(trnsf.df)])
+
+
 ```
 
 (2) Covariate correlation

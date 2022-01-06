@@ -1,0 +1,436 @@
+---
+title: "Monocyte analysis V11.1"
+author: "Raphael Kübler"
+date: "01/05/2021"
+output:
+  rmarkdown::html_document:
+   theme: united
+   highlight: tango
+   code_folding: hide
+   toc: true
+   toc_float: true
+   df_print: paged
+   smooth_scroll: true
+   number_sections: false
+   self_contained: true 
+---
+
+This analysis consists of four major parts (three of which are essential to its interpretation):
+1) the base QC and data correction (based on appropriate model choice)
+2) DEA and enrichment analysis (annotation)
+3) Dissection of GEX variance in gene sets (delineation of status effect)
+4) Networking approach: co-regulations (propagation of status effect on rest of transcriptome)
+
+
+```{r load.packages, echo=FALSE, message=FALSE, results='hide'}
+library(xlsx)
+library(dplyr)
+library(readxl)
+library(Hmisc)
+library(pheatmap)
+library(DESeq2)
+library(factoextra)
+library(broom)
+
+library(variancePartition)
+library(RColorBrewer)
+library(pcaExplorer)
+library(vsn)
+
+library(clusterProfiler)
+
+library(EnhancedVolcano)
+library(plyr)
+library(ggpmisc)
+library(ggbeeswarm)
+library(ggpubr)
+
+knitr::opts_chunk$set( 
+  warning=FALSE,
+  message=FALSE,
+  results = 'asis',
+  error = FALSE,
+  tidy = FALSE,
+  fig.show = "hold")
+
+plot.density <- function(meta.df,to.color="Condition",to.plot="Library size",ylab.title="Density",xlab.title="Library size"){
+  meta.df %>% 
+    ggplot(aes_string(color=to.color, x=to.plot, fill=to.color)) + 
+    geom_density(alpha = 0.2) + 
+    scale_x_log10() + 
+    theme_classic() +
+    ylab(ylab.title) +
+    xlab(xlab.title)
+}
+
+```
+
+Analysis of monocyte data (SCZ vs CTR): most advanced model
+
+## Load data
+```{r load_data, echo=FALSE}
+dir <- file.path("D:", "R", "R workspace")
+setwd(dir)
+
+load("01052022_Monocyte paper analysis_V11_1.RData")
+
+```
+
+## Base QC
+
+Plotting the first QC results:
+
+(1) Density plot
+```{r plots.1, echo=FALSE}
+#Density plots
+#550 x 450
+#Library size; no need to filter: normally distributed
+plot.density(imputed.covs,to.color="status",to.plot="`Mapped`",xlab.title="Reads mapped")
+plot.density(imputed.covs,to.color="status",to.plot="`Exonic.Rate`",xlab.title="Exonic rate")
+plot.density(imputed.covs,to.color="status",to.plot="`Genes.Detected`",xlab.title="Genes detected")
+plot.density(imputed.covs,to.color="status",to.plot="`RIN`",xlab.title="RIN")
+
+
+```
+
+(2) Sample-sample correlation
+```{r plots.2, echo=FALSE, fig.height = 6, fig.width = 7.5, fig.align = "center"}
+annot_df <- data.frame("Status"=as.character(imputed.covs$status), "Sex"=as.character(imputed.covs$sex), check.names = F)
+annot_df$Status[annot_df$Status == 1] <- "SCZ"
+annot_df$Status[annot_df$Status == 0] <- "CTR"
+annot_df$Sex[annot_df$Sex == 1] <- "Male"
+annot_df$Sex[annot_df$Sex == 2] <- "Female"
+
+rownames(annot_df) <- rownames(imputed.covs)
+cols <- c("gray","tomato")
+cols.2 <- c("#A6CEE3","lightpink")
+
+annot_colors <- list("Status"=cols, "Sex"=cols.2) #annotation colors for heatmap
+names(annot_colors$`Status`) <- c("CTR","SCZ")
+names(annot_colors$`Sex`) <- c("Male","Female")
+
+
+ComplexHeatmap::pheatmap(cor(filt.df), annotation_row = annot_df, annotation_col = annot_df,
+                         annotation_colors = annot_colors, color = heatmap.color.code)
+```
+
+(3) Covariate correlation
+```{r norm.qc1, echo=TRUE, fig.height = 10, fig.width = 12, fig.align = "center"}
+#Covariate correlation
+for (i in colnames(imputed.covs))
+  imputed.covs[,i] <- as.numeric(as.character(imputed.covs[,i]))
+MEs_lin(imputed.covs,imputed.covs)
+
+```
+
+(4) PC-covariate correlation
+```{r QC.pre, echo=TRUE, fig.height = 4, fig.width = 7, fig.align = "center"}
+
+#PC-covariate correlation (nomal p)
+PCA_cov_cor_R(imputed.covs, filt.df)
+
+```
+
+Next step: QC on vst-normalized expression values.
+
+(1) Inter-sample distances
+
+```{r norm.qc2, echo=FALSE, fig.height = 6, fig.width = 7.5, fig.align = "center"}
+ComplexHeatmap::pheatmap(cor(trnsf.df,trnsf.df), annotation_row = annot_df, annotation_col = annot_df,
+                         annotation_colors = annot_colors, color = heatmap.color.code)
+
+```
+
+(2) Normalized PCA
+
+```{r qc3.1, echo=TRUE, fig.height = 4, fig.width = 5.5, fig.align = "center"}
+for (i in c("status", "smoking", "coffee", "sex", "batch", "drugs", "antipsychotics", "antidepressive", "antianxiety"))
+  imputed.covs[,i] <- as.factor(imputed.covs[,i])
+pca <- plotPCA.custom(as.matrix(trnsf.df), intgroup=c("status", "batch", "sex", "smoking"), 
+                      ntop = 50000, returnData=TRUE, metadata=imputed.covs, pc.1 = 1, pc.2 = 2)
+PoV <- round(100 * attr(pca, "percentVar"))
+PCAplot(pca, "status", PoV.df=PoV, pc.1 = 1, pc.2 = 2) 
+
+```
+
+
+(3) PCA post outlier removal
+```{r qc3.2, echo=TRUE, fig.height = 4, fig.width = 5.5, fig.align = "center"}
+PCAplot(pca.clean, "status", PoV.df=PoV.clean, pc.1 = 1, pc.2 = 2)
+
+```
+
+
+(4) Variance partitioning
+
+```{r qc3.3, echo=TRUE, fig.height = 6, fig.width = 7.5, fig.align = "center"}
+#Check influence of covariates on data variance after transformation
+plotVarPart(vp)
+
+```
+
+
+## Data correction
+(1) PC-covariate correlation
+```{r QC.post, echo=TRUE, fig.height = 4, fig.width = 7, fig.align = "center"}
+print("The model used is:")
+dds@design
+
+#PC-covariate correlation (nominal p)
+PCA_cov_cor_R(clean_covs, batch.rem)
+
+```
+
+(2) PCA plots
+```{r batchrem.1, echo=TRUE, fig.height = 4, fig.width = 5.5, fig.align = "center"}
+PCAplot(pca.cor, "status", PoV.df=PoV.cor, pc.1 = 1, pc.2 = 2)
+
+
+```
+
+(3) New sample-sample correlations
+```{r batchrem.2, echo=FALSE, fig.height = 6, fig.width = 7.5, fig.align = "center"}
+annot_df <- annot_df[!rownames(annot_df) %in% c("36", "37"),]
+ComplexHeatmap::pheatmap(cor(batch.rem), annotation_row = annot_df, annotation_col = annot_df,
+                         annotation_colors = annot_colors, color = heatmap.color.code)
+```
+## DESeq2 anaylsis
+
+We then go into the differential gene-expression analysis:
+
+(1) Overview of the results 
+```{r plots.11, echo=FALSE}
+summary(res)
+```
+
+As well as the number of differentially expressed genes at lfc </> -/+0.5 at padj < 0.1:
+
+```{r plots.12, echo=FALSE}
+sum(res$log2FoldChange < -0.5 & res$padj < 0.1, res$log2FoldChange > 0.5 & res$padj < 0.1, na.rm=TRUE)
+
+```
+
+## Interactive results table
+
+(1) Results
+
+```{r DESeq2, echo=TRUE, message=FALSE, warning=FALSE, paged.print=TRUE}
+#DT::renderDT(data.frame(res.complex), "OH1.5A",scrollY=1000)
+
+createDT(data.frame(res), "Status", scrollY=1000)
+
+```
+
+## Plotting results
+
+(2) Volcano plot:
+```{r plots.13, echo=TRUE, fig.height = 6, fig.width = 8, fig.align = "center"}
+EnhancedVolcano(res,
+                lab = rownames(res),
+                x = 'log2FoldChange',
+                y = 'padj',
+                pCutoff = 0.1,
+                FCcutoff = 0.5,
+                labSize = 6,
+                xlim = c(-2.5,2.5),
+                ylim = c(-0.5,2),
+                legendPosition = 'right')
+```
+
+(3) Plotting top genes (lFC < -1 / > 1) on a heatmap:
+```{r plots.14A, echo=TRUE, fig.height = 5, fig.width = 6, fig.align = "center"}
+
+#Plotting DEGs
+ComplexHeatmap::pheatmap(batch.rem[rownames(batch.rem) %in% upreg.genesALL,], scale= "row",
+                         cluster_rows = T, cluster_cols = T, annotation_legend = T, show_colnames = F, show_rownames = T,
+                         legend = T, treeheight_row = 0, color = heatmap.color.code,
+                         annotation_col=annot_df, annotation_colors = annot_colors, fontsize_row = 8)
+
+
+
+
+```
+
+```{r plots.14B, echo=TRUE, fig.height = 6, fig.width = 6, fig.align = "center"}
+
+ComplexHeatmap::pheatmap(batch.rem[rownames(batch.rem) %in% downreg.genesALL,], scale= "row",
+                         cluster_rows = T, cluster_cols = T, annotation_legend = T, show_colnames = F, show_rownames = T,
+                         legend = T, treeheight_row = 0, color = heatmap.color.code,
+                         annotation_col=annot_df, annotation_colors = annot_colors, fontsize_row = 8)
+
+```
+
+
+
+## Enrichment testing results
+
+Making meaning of our DEGs
+
+(1) GO enrichments
+```{r plots.15, echo=TRUE, fig.height = 9, fig.width = 12, fig.align = "center"}
+
+dotplot(GO.up, split="ONTOLOGY") + facet_grid(ONTOLOGY~., scale="free")
+
+```
+```{r B, echo=TRUE, fig.height = 3, fig.width = 10, fig.align = "center"}
+
+print("No GO-term enrichments for downregulated genes")
+```
+
+
+(2) Hand-selected gene set enrichments
+```{r Enrich, echo=TRUE, message=FALSE, warning=FALSE, paged.print=TRUE}
+#DT::renderDT(data.frame(res.complex), "OH1.5A",scrollY=1000)
+paste("Reminder: we have", length(upreg.genesALL), "upregulated and", length(downreg.genesALL), "downregulated genes.")
+
+createDT(DEG.enrich.res, "Enrichment", scrollY=1000)
+
+```
+
+```{r plots.15beta, echo=TRUE, fig.height = 3, fig.width = 3, fig.align = "center"}
+
+ComplexHeatmap::pheatmap(DEG.enrich, cluster_rows = F, cluster_cols = F, annotation_legend = F, show_colnames = T,
+                         legend_breaks= c(0,-log(0.05), 10, 20, 20), 
+                         legend = T, color = colorRampPalette(RColorBrewer::brewer.pal(6,"RdPu"))(30), 
+                         legend_labels=c("0","2.995", "10", "20","-log2(q) \n\n\n"))
+
+
+```
+
+
+(3) Gene-set overlap
+```{r enrich.overlap, fig.height = 5, fig.width = 6, fig.align = "center"}
+
+ComplexHeatmap::pheatmap(overlap.genesets, cluster_rows = F, cluster_cols = F)
+```
+
+So we select the NFKB, LPS, and chronic/acute GC stimulation gene sets, as well as the DEX 2.5/5nM stimulation
+
+
+## Status effect on gene set expression
+
+(1) Gene set DEG expressions
+```{r var.1, echo=TRUE, fig.height = 5, fig.width = 6, fig.align = "center"}
+gene.sets <- c("NfKB", "LPS", "acute_GC", "chronic_GC", "DEX_2.5nM", "DEX_5nM")
+
+for (i in gene.sets){
+  panel <- panel.list[[i]]
+  DE <- DE.list[[i]]
+  df <- panel[DE$log2FoldChange < -0.5 | DE$log2FoldChange > 0.5,]
+  df <- df[,order(as.numeric(colnames(df)), method="radix", decreasing=F)]
+  ComplexHeatmap::pheatmap(df, scale= "row",
+                           cluster_rows = T, cluster_cols = T, annotation_legend = T, show_colnames = F, show_rownames = T,
+                           legend = T, treeheight_row = 0, color = heatmap.color.code,
+                           annotation_col=annot_df, annotation_colors = annot_colors, fontsize_row = 8, column_title=paste("DEGs within the", i, "list"))
+}
+
+```
+
+(1A) Compound median lFC^2 for each signature
+```{r plots.16A, echo=TRUE, fig.height = 4, fig.width = 4, fig.align = "center"}
+#mean lFC to point directions
+compoundlFC <- median(DE.list[[3]][order(DE.list[[3]]$log2FoldChange^2, decreasing=T),][1:10,]$log2FoldChange)
+for (i in gene.sets[-1]){
+  top10 <- DE.list[[i]][order(DE.list[[i]]$log2FoldChange^2, decreasing=T),][1:10,]
+  compoundlFC <- rbind(compoundlFC,median(top10$log2FoldChange))}
+rownames(compoundlFC) <- gene.sets
+
+
+ComplexHeatmap::pheatmap(compoundlFC^2, color = colorRampPalette(RColorBrewer::brewer.pal(6,"RdPu"))(30),
+                         cluster_rows = F)
+
+
+```
+
+
+(2) Variance causa testing
+```{r var.causa, echo=TRUE, fig.height = 4, fig.width = 5.5, fig.align = "center"}
+
+for (i in gene.sets){
+ dat <- batch.rem[rownames(batch.rem) %in% na.omit(gene.panels_mrgd[,i]),]
+#  plots <- PCA_cov_cor_R(clean_covs, dat) #if 
+  list.pca <- plotPCA.custom(as.matrix(dat), intgroup=c("status", "batch", "sex", "RIN"), 
+                             ntop = 50000, returnData=TRUE, metadata=clean_covs, pc.1=1, pc.2=2)
+  list.pov <- round(100 * attr(list.pca, "percentVar"))
+  plot <- PCAplot(list.pca, "status", PoV.df=list.pov, pc.1=1, pc.2=2)
+  print(plot)}
+```
+
+(2A) Variance causa testing - does GEX variance come really from status?
+
+PC-expression t-test
+```{r varPar, echo=TRUE, fig.height = 7, fig.width = 7, fig.align = "center"}
+PC.boxplots <- ggarrange(plotlist=scatters[names(scatters) %in% gene.sets], common.legend = T)
+PC.boxplots
+
+
+```
+
+
+
+```{r plots.17, echo=TRUE, fig.height = 3, fig.width = 8, fig.align = "center"}
+GEX.stat.cor <- GEX.stat.cor[rownames(GEX.stat.cor) %in% gene.sets,]
+matrix_pvalue <- matrix_pvalue[rownames(matrix_pvalue) %in% gene.sets,]
+ComplexHeatmap::pheatmap(cbind(GEX.stat.cor[,1]), cluster_rows = F, cluster_cols = T, annotation_legend = F, show_colnames = T,
+                         legend_breaks= c(-0.6,-0.3,0,0.3,0.6,0.6), 
+                         legend = T, color = heatmap.color.code,
+                         legend_labels=c("-0.6","-0.3","0","0.3","0.6","Spearman rho \n\n\n"),
+                         display_numbers = as.matrix(matrix_pvalue[,1]), column_title="Status-GEX variance correlation")
+
+ComplexHeatmap::pheatmap(cbind(GEX.stat.cor[,3]), cluster_rows = F, cluster_cols = T, annotation_legend = F, show_colnames = T,
+                         legend_breaks= c(-3.5,-2.5,-1,0,1,2.5,2.5), 
+                         legend = T, color = heatmap.color.code,
+                         legend_labels=c("-3.5","-2.5","-1","0","1","2.5","beta \n\n\n"),
+                         display_numbers = as.matrix(matrix_pvalue[,2]), column_title="GEX variance prediction based on status (beta effect size)")
+
+
+
+```
+
+
+
+## NfKB signature co-variances
+
+(1) DEG gene program-NfKB gene program interaction based on PCs
+```{r plots.19, echo=TRUE, fig.height = 8, fig.width = 10, fig.align = "center"}
+#Compiling a new list of scatter plots
+#Compile a list of the usable plots:
+DEG.NfKB <- list()
+names(DEGscatters$DEG)
+for (i in names(DEGscatters)[1:3])
+  DEG.NfKB <- append(DEG.NfKB, DEGscatters[[i]]["NfKB"])
+
+#1) co-reg between NfKB and DEGs
+DEG.NfKB.compoundScatter <- ggarrange(plotlist=DEG.NfKB[1:length(DEG.NfKB)], common.legend = T)
+DEG.NfKB.compoundScatter
+
+```
+(2) Gene program-Gene program interaction based on PCs
+```{r plots.20, echo=TRUE, fig.height = 8, fig.width = 10, fig.align = "center"}
+#2) co-regs between NfKB and all other gene sets
+
+all.NfKB <- DEGscatters[["NfKB"]][!names(DEGscatters[[i]]) %in% c("NfKB","DEG", "DEG.up", "DEG.down")]
+
+all.NfKB.compoundScatter <- ggarrange(plotlist=all.NfKB[1:length(all.NfKB)])
+all.NfKB.compoundScatter
+
+```
+
+
+(3) Data summarized as correlation on heatmap
+```{r plots.21, echo=TRUE, fig.height = 6, fig.width = 6.5, fig.align = "center"}
+
+ComplexHeatmap::pheatmap(rcorr(as.matrix(cbind(DEGscatter.df,"Status"=scatter.df[,1])), type="spearman")$r,
+                         color = heatmap.color.code, fontsize_row = 8, fontsize_col = 8)
+```
+
+
+(3) One more network question: Does status influence these interactions?
+```{r plots.22, echo=TRUE, fig.height = 9, fig.width = 9.5, fig.align = "center"}
+
+ComplexHeatmap::pheatmap(z, cluster_rows = T, cluster_cols = T, annotation_legend = F, show_colnames = T,
+                         legend_breaks= c(-2,-1,0,1,2,2), 
+                         legend = T, color = heatmap.color.code,
+                         legend_labels=c("-2","-1","0","1","2","z-score \n\n\n"),
+                         display_numbers = P)
+```

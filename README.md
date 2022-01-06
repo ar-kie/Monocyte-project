@@ -12,5 +12,5 @@
 
 #========New analysis with correct covariate file=========#
 
-4. Most recent analysis: removing all technical covariates 
-- [MonoAnalysis_V10](https://ar-kie.github.io/Monocyte-project/docs/12152021_monocyte-analysis-V10_markdown.html). 
+4. Most recent analysis: removing all technical covariates, BMI, & sex
+- [MonoAnalysis_V11](https://ar-kie.github.io/Monocyte-project/docs/01052021_monocyte-analysis-V11.1_markdown.html). 
