@@ -8,3 +8,6 @@ This is the RNA-seq analysis of whole blood-derived monocytes from schizophrenia
 For detailed questions please contact my PI (Lot de Witte) or me (Raphael Kubler): <br/>
 - lot (dot) dewitte (at) mssm (dot) edu <br/>
 - raphael (dot) kubler (at) mssm (dot) edu <br/>
+
+
+Paper has been officially accepted for publication by BBI on May 1st 2023. Link to the paper will be added once published. 
