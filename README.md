@@ -10,4 +10,5 @@ For detailed questions please contact my PI (Lot de Witte) or me (Raphael Kubler
 - raphael (dot) kubler (at) mssm (dot) edu <br/>
 
 
-Paper has been officially accepted for publication by BBI on May 1st 2023. Link to the paper will be added once published. 
+Paper has been officially accepted for publication by BBI on May 1st 2023. Link to the paper:
+https://www.sciencedirect.com/science/article/abs/pii/S0889159123001174
